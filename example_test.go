@@ -8,7 +8,7 @@ import (
 
 func Example() {
 	transport := rafthttp.NewHTTPTransport(
-		rafthttp.DnsAddr("test.example.net:8080"),
+		"test.example.net:8080",
 		http.DefaultClient,
 		nil,
 		"")
