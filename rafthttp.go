@@ -133,12 +133,62 @@ func (t *HTTPTransport) RequestVote(target string, args *raft.RequestVoteRequest
 
 // InstallSnapshot implements the raft.Transport interface.
 func (t *HTTPTransport) InstallSnapshot(target string, args *raft.InstallSnapshotRequest, resp *raft.InstallSnapshotResponse, data io.Reader) error {
-	buf, err := ioutil.ReadAll(data)
+	defer metrics.MeasureSince([]string{"raft", "httptransport", "latency"}, time.Now())
+
+	// Send a dummy request to see if the remote host supports
+	// InstallSnapshotStreaming after all. We need to know whether we can use
+	// InstallSnapshotStreaming or whether we need to fall back to
+	// InstallSnapshot beforehand, because we cannot seek in |data|.
+	url := fmt.Sprintf(t.urlFmt+"InstallSnapshotStreaming", target)
+	probeReq, err := http.NewRequest("POST", url, nil)
 	if err != nil {
-		return fmt.Errorf("could not read data: %v", err)
+		return err
+	}
+	probeRes, err := t.client.Do(probeReq)
+	if err != nil {
+		return err
+	}
+	ioutil.ReadAll(probeRes.Body)
+	probeRes.Body.Close()
+	if probeRes.StatusCode == http.StatusNotFound {
+		// Possibly the remote host runs an older version of the code
+		// without the InstallSnapshotStreaming handler. Try the old
+		// version.
+		buf := make([]byte, 0, args.Size+bytes.MinRead)
+		b := bytes.NewBuffer(buf)
+		if _, err := io.CopyN(b, data, args.Size); err != nil {
+			return fmt.Errorf("could not read data: %v", err)
+		}
+		buf = b.Bytes()
+		return t.send(fmt.Sprintf(t.urlFmt+"InstallSnapshot", target), installSnapshotRequest{args, buf}, resp)
 	}
 
-	return t.send(fmt.Sprintf(t.urlFmt+"InstallSnapshot", target), installSnapshotRequest{args, buf}, resp)
+	req, err := http.NewRequest("POST", url, data)
+	if err != nil {
+		return err
+	}
+	buf, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-InstallSnapshotRequest", string(buf))
+	res, err := t.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("could not send request: %v", err)
+	}
+
+	defer func() {
+		// Make sure to read the entire body and close the connection,
+		// otherwise net/http cannot re-use the connection.
+		ioutil.ReadAll(res.Body)
+		res.Body.Close()
+	}()
+
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected HTTP status code: %v", res.Status)
+	}
+
+	return json.NewDecoder(res.Body).Decode(resp)
 }
 
 // EncodePeer implements the raft.Transport interface.
@@ -196,6 +246,36 @@ func (t *HTTPTransport) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	switch cmd {
 	case "InstallSnapshot":
 		rpc.Command = &installSnapshotRequest{}
+	case "InstallSnapshotStreaming":
+		var isr raft.InstallSnapshotRequest
+		if err := json.Unmarshal([]byte(req.Header.Get("X-InstallSnapshotRequest")), &isr); err != nil {
+			err := fmt.Errorf("Could not parse request: %v", err)
+			http.Error(res, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rpc.Command = &isr
+		rpc.Reader = req.Body
+		respChan := make(chan raft.RPCResponse)
+		rpc.RespChan = respChan
+
+		t.consumer <- rpc
+
+		resp := <-respChan
+
+		if resp.Error != nil {
+			err := fmt.Errorf("Could not run RPC: %v", resp.Error)
+			http.Error(res, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		res.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(res).Encode(resp.Response); err != nil {
+			err := fmt.Errorf("Could not encode response: %v", err)
+			http.Error(res, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		return
 	case "RequestVote":
 		rpc.Command = &raft.RequestVoteRequest{}
 	case "AppendEntries":
