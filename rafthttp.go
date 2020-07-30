@@ -33,7 +33,7 @@ type Doer interface {
 type HTTPTransport struct {
 	logger   *log.Logger
 	consumer chan raft.RPC
-	addr     string
+	addr     raft.ServerAddress
 	client   Doer
 	urlFmt   string
 }
@@ -48,7 +48,7 @@ type HTTPTransport struct {
 // urlFmt defaults to "https://%v/raft/" and will be used in
 // fmt.Sprintf(urlFmt+"/method", target) where method is the raft RPC method
 // (e.g. appendEntries).
-func NewHTTPTransport(addr string, client Doer, logger *log.Logger, urlFmt string) *HTTPTransport {
+func NewHTTPTransport(addr raft.ServerAddress, client Doer, logger *log.Logger, urlFmt string) *HTTPTransport {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -108,12 +108,12 @@ func (t *HTTPTransport) Consumer() <-chan raft.RPC {
 }
 
 // LocalAddr implements the raft.Transport interface.
-func (t *HTTPTransport) LocalAddr() string {
+func (t *HTTPTransport) LocalAddr() raft.ServerAddress {
 	return t.addr
 }
 
 // AppendEntriesPipeline implements the raft.Transport interface.
-func (t *HTTPTransport) AppendEntriesPipeline(target string) (raft.AppendPipeline, error) {
+func (t *HTTPTransport) AppendEntriesPipeline(_ raft.ServerID, target raft.ServerAddress) (raft.AppendPipeline, error) {
 	// This transport does not support pipelining in the hashicorp/raft sense.
 	// The underlying net/http reuses connections (keep-alive) and that is good
 	// enough. We are talking about differences in the microsecond range, which
@@ -122,17 +122,17 @@ func (t *HTTPTransport) AppendEntriesPipeline(target string) (raft.AppendPipelin
 }
 
 // AppendEntries implements the raft.Transport interface.
-func (t *HTTPTransport) AppendEntries(target string, args *raft.AppendEntriesRequest, resp *raft.AppendEntriesResponse) error {
+func (t *HTTPTransport) AppendEntries(_ raft.ServerID, target raft.ServerAddress, args *raft.AppendEntriesRequest, resp *raft.AppendEntriesResponse) error {
 	return t.send(fmt.Sprintf(t.urlFmt+"AppendEntries", target), args, resp)
 }
 
 // RequestVote implements the raft.Transport interface.
-func (t *HTTPTransport) RequestVote(target string, args *raft.RequestVoteRequest, resp *raft.RequestVoteResponse) error {
+func (t *HTTPTransport) RequestVote(_ raft.ServerID, target raft.ServerAddress, args *raft.RequestVoteRequest, resp *raft.RequestVoteResponse) error {
 	return t.send(fmt.Sprintf(t.urlFmt+"RequestVote", target), args, resp)
 }
 
 // InstallSnapshot implements the raft.Transport interface.
-func (t *HTTPTransport) InstallSnapshot(target string, args *raft.InstallSnapshotRequest, resp *raft.InstallSnapshotResponse, data io.Reader) error {
+func (t *HTTPTransport) InstallSnapshot(_ raft.ServerID, target raft.ServerAddress, args *raft.InstallSnapshotRequest, resp *raft.InstallSnapshotResponse, data io.Reader) error {
 	defer metrics.MeasureSince([]string{"raft", "httptransport", "latency"}, time.Now())
 
 	// Send a dummy request to see if the remote host supports
@@ -192,13 +192,13 @@ func (t *HTTPTransport) InstallSnapshot(target string, args *raft.InstallSnapsho
 }
 
 // EncodePeer implements the raft.Transport interface.
-func (t *HTTPTransport) EncodePeer(a string) []byte {
+func (t *HTTPTransport) EncodePeer(_ raft.ServerID, a raft.ServerAddress) []byte {
 	return []byte(a)
 }
 
 // DecodePeer implements the raft.Transport interface.
-func (t *HTTPTransport) DecodePeer(b []byte) string {
-	return string(b)
+func (t *HTTPTransport) DecodePeer(b []byte) raft.ServerAddress {
+	return raft.ServerAddress(string(b))
 }
 
 func (t *HTTPTransport) handle(res http.ResponseWriter, req *http.Request, rpc raft.RPC) error {
@@ -294,4 +294,8 @@ func (t *HTTPTransport) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 // SetHeartbeatHandler implements the raft.Transport interface.
 func (t *HTTPTransport) SetHeartbeatHandler(cb func(rpc raft.RPC)) {
 	// Not supported
+}
+
+func (t *HTTPTransport) TimeoutNow(_ raft.ServerID, target raft.ServerAddress, args *raft.TimeoutNowRequest, resp *raft.TimeoutNowResponse) error {
+	return t.send(fmt.Sprintf(t.urlFmt+"TimeoutNow", target), args, resp)
 }
