@@ -296,6 +296,7 @@ func (t *HTTPTransport) SetHeartbeatHandler(cb func(rpc raft.RPC)) {
 	// Not supported
 }
 
+// TimeoutNow implements the raft.Transport interface.
 func (t *HTTPTransport) TimeoutNow(_ raft.ServerID, target raft.ServerAddress, args *raft.TimeoutNowRequest, resp *raft.TimeoutNowResponse) error {
 	return t.send(fmt.Sprintf(t.urlFmt+"TimeoutNow", target), args, resp)
 }
