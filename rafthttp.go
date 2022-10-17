@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/armon/go-metrics"
@@ -185,7 +186,8 @@ func (t *HTTPTransport) InstallSnapshot(_ raft.ServerID, target raft.ServerAddre
 	}()
 
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected HTTP status code: %v", res.Status)
+		b, _ := ioutil.ReadAll(res.Body)
+		return fmt.Errorf("unexpected HTTP status code: %v (body: %s)", res.Status, strings.TrimSpace(string(b)))
 	}
 
 	return json.NewDecoder(res.Body).Decode(resp)
