@@ -237,7 +237,8 @@ func (t *HTTPTransport) handle(res http.ResponseWriter, req *http.Request, rpc r
 }
 
 // ServeHTTP implements the net/http.Handler interface, so that you can use
-//     http.Handle("/raft/", transport)
+//
+//	http.Handle("/raft/", transport)
 func (t *HTTPTransport) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	cmd := path.Base(req.URL.Path)
 
