@@ -283,6 +283,8 @@ func (t *HTTPTransport) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		rpc.Command = &raft.RequestVoteRequest{}
 	case "AppendEntries":
 		rpc.Command = &raft.AppendEntriesRequest{}
+	case "TimeoutNow":
+		rpc.Command = &raft.TimeoutNowRequest{}
 	default:
 		http.Error(res, fmt.Sprintf("No RPC %q", cmd), 404)
 		return
